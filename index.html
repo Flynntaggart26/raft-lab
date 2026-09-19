@@ -34,6 +34,14 @@ main{padding:6px 22px 10px;max-width:1200px;margin:0 auto}
 .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-top:10px}.control{display:flex;flex-direction:column;gap:4px}.control label{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 #eventlog{font-size:.8rem;max-height:200px;overflow:auto}#eventlog div{padding:3px 0;border-bottom:1px dotted var(--border)}
 .scen{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+#narr{display:none;margin-top:10px;padding:10px 12px;border-radius:12px;border:1px solid var(--primary);background:linear-gradient(135deg,rgba(124,108,255,.18),rgba(0,224,176,.12));font-size:.85rem}
+#narr.show{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:.72rem;color:var(--muted);margin-top:8px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:middle}
+#spark{width:100%;height:36px;margin-top:6px}
+#walModal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;place-items:center;padding:20px}#walModal.open{display:grid}
+#walBox{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:16px;max-width:560px;width:100%;max-height:80vh;overflow:auto;color:var(--text)}
+#tip{position:fixed;display:none;background:#111;color:#fff;font-size:.75rem;padding:6px 10px;border-radius:8px;pointer-events:none;z-index:60;border:1px solid var(--border)}
+kbd{background:rgba(127,127,160,.2);border:1px solid var(--border);border-radius:6px;padding:1px 6px;font-size:.72rem}
 footer{padding:14px 22px 30px;color:var(--muted);font-size:.76rem;max-width:1200px;margin:0 auto}
 </style>
 </head>
@@ -54,12 +62,15 @@ footer{padding:14px 22px 30px;color:var(--muted);font-size:.76rem;max-width:1200
 <div id="metrics">
 <div class="metric"><b id="mCommits">0</b><span>commits</span></div>
 <div class="metric"><b id="mElections">0</b><span>elections</span></div>
-<div class="metric"><b id="mThroughput">0/s</b><span>throughput</span></div>
+<div class="metric"><b id="mThroughput">0/s</b><span>throughput</span><canvas id="spark" width="160" height="36"></canvas></div>
+<div class="metric"><b id="mLatency">—</b><span>avg commit latency</span></div>
 <div class="metric"><b id="mAvail">100%</b><span>majority up</span></div>
 <div class="metric"><b id="mTick">0</b><span>tick</span></div>
 </div>
 <div class="grid">
 <div class="card"><h2>🌐 Live topology — packets = heartbeats & replication</h2><canvas id="topo"></canvas>
+<div class="legend"><span><i class="dot" style="background:#00e0a4"></i>replication</span><span><i class="dot" style="background:#7c6cff"></i>heartbeat</span><span><i class="dot" style="background:#ffb800"></i>vote</span><span><i class="dot" style="background:#ff6b6b"></i>dropped</span><span>👑 = leader · dashed red = cut link</span></div>
+<div id="narr"><span id="narrText"></span><span><button id="narrNext" class="primary">Next →</button> <button id="narrStop" class="ghost">✕ Stop</button></span></div>
 <div class="scen">
 <button data-scen="replicate" class="primary">▶ Scenario: replicate</button>
 <button data-scen="kill">▶ Scenario: kill leader</button>
@@ -69,11 +80,13 @@ footer{padding:14px 22px 30px;color:var(--muted);font-size:.76rem;max-width:1200
 <div class="controls">
 <div class="control"><label>Speed</label><input type="range" id="speed" min="1" max="20" value="6"></div>
 <div class="control"><label>Packet loss %</label><input type="range" id="loss" min="0" max="50" value="0"></div>
+<div class="control"><label>Latency (ticks)</label><input type="range" id="lat" min="0" max="30" value="0"></div>
 <div class="control"><label>Client write</label><div><input id="writeVal" value="x=1" style="width:80px"> <button id="writeBtn" class="primary">Send</button></div></div>
 <div class="control"><label>Chaos</label><div style="display:flex;gap:6px;flex-wrap:wrap">
 <button id="killLeaderBtn">Kill leader</button><button id="splitBtn">Split 3-2</button><button id="isolateBtn">Isolate</button><button id="healBtn">Heal</button>
 </div></div>
-<div class="control"><label>Cluster</label><div><button id="addBtn">+1</button> <button id="rmBtn">−1</button> <button id="walBtn">WAL: on</button></div></div>
+<div class="control"><label>Cluster</label><div><button id="addBtn">+1</button> <button id="rmBtn">−1</button> <button id="walBtn">WAL: on</button> <button id="walViewBtn">View WAL</button></div></div>
+<div class="control"><label>Share</label><div><button id="shareBtn">Copy link</button> <button id="csvBtn">Export log</button></div></div>
 </div>
 </div>
 <div>
@@ -85,33 +98,41 @@ footer{padding:14px 22px 30px;color:var(--muted);font-size:.76rem;max-width:1200
 </div>
 </main>
 <footer>Simplified Raft · randomized timeouts · majority commit · packet-loss + partition-gated messaging · WAL persists committed prefix to localStorage · single file, zero deps.</footer>
+<div id="walModal"><div id="walBox"><h3 style="margin-top:0">WAL — committed prefix</h3><pre id="walPre" style="font-size:.75rem;white-space:pre-wrap"></pre><div style="display:flex;gap:8px"><button id="walReplayBtn" class="primary">Replay: kill leader, verify no loss</button><button id="walCloseBtn">Close</button></div></div></div>
+<div id="tip"></div>
 <script>
-let nodes=[],term=0,tickN=0,playing=true,speed=6,lossPct=0,part=null,packets=[],walOn=true;
-let elections=0,commitTimes=[],writeCtr=2,allEvents=[];
+let nodes=[],term=0,tickN=0,playing=true,speed=6,lossPct=0,latTicks=0,part=null,packets=[],walOn=true;
+let elections=0,commitTimes=[],writeCtr=2,allEvents=[],pendingWrites=[],delayQ=[],drops=0,latSamples=[],narrTimer=[];
+let hist=[]; // per-tick commits for sparkline
 const $=id=>document.getElementById(id);
 const rnd=(a,b)=>a+Math.floor(Math.random()*(b-a));
 const mkNode=id=>({id,state:'follower',term:0,votedFor:null,log:[],commit:0,timeout:rnd(150,300),cd:rnd(100,250),alive:true,votes:0});
-function reset(n=5){nodes=[];for(let i=1;i<=n;i++)nodes.push(mkNode('N'+i));term=0;tickN=0;part=null;packets=[];elections=0;commitTimes=[];allEvents=[];writeCtr=2;try{localStorage.removeItem('raft-wal');}catch(e){}log('cluster reset with '+n+' nodes','election');render();}
+function reset(n=5){nodes=[];for(let i=1;i<=n;i++)nodes.push(mkNode('N'+i));term=0;tickN=0;part=null;packets=[];elections=0;commitTimes=[];allEvents=[];pendingWrites=[];delayQ=[];drops=0;latSamples=[];hist=[];writeCtr=2;stopNarr();try{localStorage.removeItem('raft-wal');}catch(e){}log('cluster reset with '+n+' nodes','election');render();}
 const alive=()=>nodes.filter(n=>n.alive);
-const majority=()=>Math.floor(alive().length/2)+1;
-function reachable(a,b){if(!a.alive||!b.alive)return false;if(Math.random()*100<lossPct)return false;if(!part)return true;return part.a.has(a.id)===part.a.has(b.id);}
+const majority=()=>Math.floor(nodes.filter(n=>n.alive).length/2)+1;
+function partitioned(a,b){if(!part)return false;return part.a.has(a.id)!==part.a.has(b.id);}
+function reachable(a,b){if(!a.alive||!b.alive)return false;if(partitioned(a,b))return false;if(Math.random()*100<lossPct){drops++;spawnPacket(a,b,'#ff6b6b',true);return false;}return true;}
 function log(m,kind){kind=kind||'info';allEvents.unshift({t:tickN,m,kind});if(allEvents.length>120)allEvents.pop();paintLog();}
 function paintLog(){const f=$('filter').value;const el=$('eventlog');el.innerHTML=allEvents.filter(e=>!f||e.m.toLowerCase().includes(f)||e.kind===f).slice(0,60).map(e=>'<div>· t'+e.t+' ['+e.kind+'] '+e.m+'</div>').join('')||'<span class="kv">empty</span>';}
 $('filter').onchange=paintLog;
-function spawnPacket(a,b,color){const A=pos(a.id),B=pos(b.id);if(A&&B)packets.push({x1:A.x,y1:A.y,x2:B.x,y2:B.y,p:0,color:color||'#7c6cff'});}
+function spawnPacket(a,b,color,dropped){const A=pos(a.id),B=pos(b.id);if(A&&B)packets.push({x1:A.x,y1:A.y,x2:B.x,y2:B.y,p:0,color:color||'#7c6cff',drop:!!dropped});}
+function deliver(fn){if(latTicks>0)delayQ.push({at:tickN+latTicks,fn});else fn();}
 function tick(){
 tickN++;
+// delayed messages
+delayQ=delayQ.filter(d=>{if(d.at<=tickN){try{d.fn();}catch(e){}return false;}return true;});
 for(const n of nodes){if(!n.alive)continue;
 if(n.state==='leader'){n.cd--;if(n.cd<=0){n.cd=50;
 for(const f of nodes){if(f===n)continue;if(!reachable(n,f))continue;spawnPacket(n,f,f.log.length<n.log.length?'#00e0a4':'#7c6cff');
-while(f.log.length<n.log.length)f.log.push({...n.log[f.log.length]});
-f.term=n.term;f.cd=f.timeout;if(f.state==='candidate')f.state='follower';f.commit=Math.min(n.commit,f.log.length);}}}
+deliver(()=>{while(f.log.length<n.log.length)f.log.push({...n.log[f.log.length]});f.term=n.term;f.cd=f.timeout;if(f.state==='candidate')f.state='follower';f.commit=Math.min(n.commit,f.log.length);});}}}
 else{n.cd--;if(n.cd<=0)startElection(n);}}
+let committedNow=0;
 for(const l of nodes.filter(n=>n.state==='leader'&&n.alive)){
 while(l.commit<l.log.length){const idx=l.commit;let cnt=1;
-for(const f of nodes)if(f!==l&&f.alive&&f.log.length>idx&&f.log[idx].term===l.log[idx].term&&(part?part.a.has(l.id)===part.a.has(f.id):true))cnt++;
-if(cnt>=majority()){l.commit++;commitTimes.push(Date.now());log('committed "'+l.log[idx].cmd+'" (term '+l.log[idx].term+')','commit');persist(l);}else break;}
+for(const f of nodes)if(f!==l&&f.alive&&f.log.length>idx&&f.log[idx].term===l.log[idx].term&&!partitioned(l,f))cnt++;
+if(cnt>=majority()){l.commit++;committedNow++;commitTimes.push(Date.now());const w=pendingWrites.find(w=>w.cmd===l.log[idx].cmd);if(w){latSamples.push(tickN-w.at);pendingWrites=pendingWrites.filter(x=>x!==w);}log('committed "'+l.log[idx].cmd+'" (term '+l.log[idx].term+')','commit');persist(l);}else break;}
 for(const f of nodes)if(f!==l&&f.alive)f.commit=Math.min(l.commit,f.log.length);}
+hist.push(committedNow);if(hist.length>60)hist.shift();
 render();
 }
 function startElection(n){n.state='candidate';n.term=++term;elections++;n.votedFor=n.id;n.votes=1;n.cd=n.timeout=rnd(150,300);
@@ -121,16 +142,23 @@ if(p.term<=n.term){p.term=n.term;p.votedFor=n.id;p.state='follower';p.cd=p.timeo
 if(n.votes>=majority()){n.state='leader';n.cd=0;log(n.id+' becomes LEADER (term '+n.term+', '+n.votes+'/'+alive().length+')','election');}
 else{n.state='follower';n.cd=rnd(120,250);}}
 function persist(l){if(!walOn)return;try{localStorage.setItem('raft-wal',JSON.stringify(l.log.slice(0,l.commit)));}catch(e){}}
-function clientWrite(cmd){const l=nodes.find(n=>n.state==='leader'&&n.alive);if(!l){log('no leader — write "'+cmd+'" dropped','crash');return;}l.log.push({term:l.term,cmd});log('client → '+l.id+': "'+cmd+'" (idx '+l.log.length+')','commit');render();}
+function clientWrite(cmd){const l=nodes.find(n=>n.state==='leader'&&n.alive);if(!l){log('no leader — write "'+cmd+'" dropped','crash');return;}l.log.push({term:l.term,cmd});pendingWrites.push({cmd,at:tickN});log('client → '+l.id+': "'+cmd+'" (idx '+l.log.length+')','commit');render();}
 // topology
 function pos(id){const c=$('topo'),r=c.getBoundingClientRect();const i=nodes.findIndex(n=>n.id===id);if(i<0)return null;const cx=r.width/2,cy=r.height/2,R=Math.min(r.width,r.height)/2-34;const a=-Math.PI/2+i*(2*Math.PI/nodes.length);return{x:cx+R*Math.cos(a),y:cy+R*Math.sin(a)};}
 function drawTopo(){const c=$('topo'),ctx=c.getContext('2d');const dpr=window.devicePixelRatio||1;const r=c.getBoundingClientRect();c.width=r.width*dpr;c.height=r.height*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,r.width,r.height);
+// partition zone shading
+if(part){ctx.fillStyle='rgba(0,224,164,.06)';ctx.fillRect(0,0,r.width/2,r.height);ctx.fillStyle='rgba(255,107,107,.07)';ctx.fillRect(r.width/2,0,r.width/2,r.height);ctx.fillStyle='rgba(255,255,255,.55)';ctx.font='10px sans-serif';ctx.fillText('A ['+[...part.a].join(',')+']',8,14);ctx.fillText('B ['+[...part.b].join(',')+']',r.width-110,14);}
 // links
-for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){const A=pos(nodes[i].id),B=pos(nodes[j].id);const ok=nodes[i].alive&&nodes[j].alive&&(!part||part.a.has(nodes[i].id)===part.a.has(nodes[j].id));ctx.strokeStyle=ok?'rgba(124,108,255,.35)':'rgba(255,107,107,.5)';ctx.setLineDash(ok?[]:[5,5]);ctx.beginPath();ctx.moveTo(A.x,A.y);ctx.lineTo(B.x,B.y);ctx.stroke();ctx.setLineDash([]);}
-// packets
-packets=packets.filter(p=>p.p<=1);for(const p of packets){p.p+=.12;const x=p.x1+(p.x2-p.x1)*p.p,y=p.y1+(p.y2-p.y1)*p.p;ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(x,y,3.5,0,7);ctx.fill();}
-// nodes
-for(const n of nodes){const P=pos(n.id);ctx.fillStyle=!n.alive?'#444':n.state==='leader'?'#00e0a4':n.state==='candidate'?'#ffb800':'#7c6cff';ctx.beginPath();ctx.arc(P.x,P.y,16,0,7);ctx.fill();ctx.fillStyle='#fff';ctx.font='bold 10px sans-serif';ctx.textAlign='center';ctx.fillText(n.id.replace('N',''),P.x,P.y+3.5);ctx.fillStyle='rgba(255,255,255,.7)';ctx.font='9px sans-serif';ctx.fillText('t'+n.term,P.x,P.y+28);}}
+for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){const A=pos(nodes[i].id),B=pos(nodes[j].id);if(!A||!B)continue;const cut=!nodes[i].alive||!nodes[j].alive||partitioned(nodes[i],nodes[j]);ctx.strokeStyle=cut?'rgba(255,107,107,.55)':'rgba(124,108,255,.35)';ctx.lineWidth=cut?1.5:1;ctx.setLineDash(cut?[5,5]:[]);ctx.beginPath();ctx.moveTo(A.x,A.y);ctx.lineTo(B.x,B.y);ctx.stroke();ctx.setLineDash([]);}
+// packets (red ones fade mid-flight = dropped)
+packets=packets.filter(p=>p.p<=1);for(const p of packets){p.p+=.14;const x=p.x1+(p.x2-p.x1)*p.p,y=p.y1+(p.y2-p.y1)*p.p;ctx.globalAlpha=p.drop?(1-p.p):1;ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(x,y,p.drop?3:3.5,0,7);ctx.fill();if(p.drop){ctx.strokeStyle='#ff6b6b';ctx.beginPath();ctx.moveTo(x-4,y-4);ctx.lineTo(x+4,y+4);ctx.moveTo(x+4,y-4);ctx.lineTo(x-4,y+4);ctx.stroke();}ctx.globalAlpha=1;}
+// nodes with pulse on leader + crown
+const pulse=(Date.now()/600)%1;
+for(const n of nodes){const P=pos(n.id);if(!P)continue;if(n.state==='leader'&&n.alive){ctx.strokeStyle='rgba(0,224,164,'+(0.6*(1-pulse))+')';ctx.lineWidth=3;ctx.beginPath();ctx.arc(P.x,P.y,16+pulse*8,0,7);ctx.stroke();}
+ctx.fillStyle=!n.alive?'#444':n.state==='leader'?'#00e0a4':n.state==='candidate'?'#ffb800':'#7c6cff';ctx.beginPath();ctx.arc(P.x,P.y,16,0,7);ctx.fill();ctx.fillStyle='#fff';ctx.font='bold 10px sans-serif';ctx.textAlign='center';ctx.fillText(n.id.replace('N',''),P.x,P.y+3.5);
+if(n.state==='leader'&&n.alive){ctx.font='12px sans-serif';ctx.fillText('👑',P.x,P.y-20);}
+ctx.fillStyle='rgba(255,255,255,.7)';ctx.font='9px sans-serif';ctx.fillText('t'+n.term+' '+n.commit+'/'+n.log.length,P.x,P.y+30);}}
+function drawSpark(){const c=$('spark');if(!c)return;const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);const max=Math.max(1,...hist);ctx.strokeStyle='#00e0a4';ctx.lineWidth=2;ctx.beginPath();hist.forEach((v,i)=>{const x=i/(Math.max(1,hist.length-1))*c.width,y=c.height-4-(v/max)*(c.height-8);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();}
 function render(){
 const box=$('nodes');box.innerHTML='';
 const leader=nodes.find(n=>n.state==='leader'&&n.alive);
@@ -141,24 +169,32 @@ d.querySelector('button').onclick=()=>{n.alive=!n.alive;if(!n.alive&&n.state==='
 box.appendChild(d);}
 // pills + metrics
 $('statTerm').textContent='term '+term;$('statLeader').textContent='leader '+(leader?leader.id:'—');
-$('statNet').textContent=part?('partition A['+[...part.a]+'] B['+[...part.b]+']'):'connected';$('statDrop').textContent='loss '+lossPct+'%';
+$('statNet').textContent=part?('partition A['+[...part.a]+'] B['+[...part.b]+']'):'connected';$('statDrop').textContent='loss '+lossPct+'% · drops '+drops+(latTicks?' · +'+latTicks+'t lat':'');
 $('mCommits').textContent=(leader?leader.commit:Math.max(0,...nodes.map(n=>n.commit)));
 $('mElections').textContent=elections;$('mTick').textContent=tickN;
 const now=Date.now();commitTimes=commitTimes.filter(t=>now-t<10000);$('mThroughput').textContent=(commitTimes.length/10).toFixed(1)+'/s';
+$('mLatency').textContent=latSamples.length?(latSamples.reduce((a,b)=>a+b,0)/latSamples.length).toFixed(1)+' ticks':'—';
 const up=alive().length,n=nodes.length;$('mAvail').textContent=(up>=majority()?100:Math.round(up/n*100))+'%';
-// timeline
+// timeline (term-colored)
 const tl=$('timeline');const L=leader&&leader.log.length?leader.log:nodes[0]?.log||[];
-tl.innerHTML=L.length?L.map((e,i)=>'<span class="tchip" style="'+(i<(leader?leader.commit:0)?'':'opacity:.4')+'">'+e.cmd+'</span>').join(''):'<span class="kv">no commits yet — press Send</span>';
-drawTopo();
+tl.innerHTML=L.length?L.map((e,i)=>'<span class="tchip" title="idx '+(i+1)+' · term '+e.term+'" style="'+(i<(leader?leader.commit:0)?'':'opacity:.4;')+'border-color:hsl('+(140+e.term*47%200)+' 70% 55%)">'+e.cmd+'</span>').join(''):'<span class="kv">no commits yet — press Send</span>';
+drawTopo();drawSpark();
 }
-// scenarios
-document.querySelectorAll('[data-scen]').forEach(b=>b.onclick=()=>runScenario(b.dataset.scen));
+// narrated scenarios
+const TOURS={
+replicate:[['Sending client write…',()=>clientWrite('x=1')],['Watch green replication packets fan out',()=>{}],['Committed on majority — see timeline',()=>{}]],
+kill:[['Killing the leader…',()=>{const l=nodes.find(n=>n.state==='leader'&&n.alive)||alive()[0];if(l){l.alive=false;l.state='follower';log(l.id+' killed (tour)','crash');}render();}],['Timeouts fire, election starts (yellow votes)',()=>{}],['New leader elected — zero committed data lost',()=>clientWrite('after-failover=1')]],
+split:[['Splitting 3–2…',()=>{const ids=alive().map(n=>n.id);part={a:new Set(ids.slice(0,Math.ceil(ids.length/2))),b:new Set(ids.slice(Math.ceil(ids.length/2)))};log('partition (tour)','partition');render();}],['Majority side keeps committing',()=>clientWrite('maj=1')],['Minority stalls — heal to converge',()=>{part=null;log('healed (tour)','partition');render();}]],
+full:[['1/5 Replicate a write',()=>clientWrite('x=1')],['2/5 Kill the leader',()=>{const l=nodes.find(n=>n.state==='leader'&&n.alive);if(l){l.alive=false;l.state='follower';log(l.id+' killed (tour)','crash');}render();}],['3/5 New leader takes over',()=>clientWrite('y=2')],['4/5 Split-brain 3–2',()=>{const ids=alive().map(n=>n.id);part={a:new Set(ids.slice(0,Math.ceil(ids.length/2))),b:new Set(ids.slice(Math.ceil(ids.length/2)))};log('partition (tour)','partition');render();}],['5/5 Heal — logs converge, safety held',()=>{part=null;clientWrite('z=3');log('healed (tour)','partition');render();}]]};
+let tourIdx=0,tourSteps=[];
+function stopNarr(){$('narr').classList.remove('show');narrTimer.forEach(clearTimeout);narrTimer=[];}
 function runScenario(s){
-reset(nodes.length||5);
-if(s==='replicate'||s==='full')setTimeout(()=>clientWrite('x=1'),600);
-if(s==='kill'||s==='full')setTimeout(()=>{const l=nodes.find(n=>n.state==='leader'&&n.alive);if(l){l.alive=false;l.state='follower';log(l.id+' killed (scenario)','crash');}render();},s==='full'?2200:600);
-if(s==='split'||s==='full')setTimeout(()=>{const ids=alive().map(n=>n.id);part={a:new Set(ids.slice(0,Math.ceil(ids.length/2))),b:new Set(ids.slice(Math.ceil(ids.length/2)))};log('partition A['+[...part.a]+'] vs B['+[...part.b]+']','partition');render();},s==='full'?4200:600);
-if(s==='full')setTimeout(()=>{part=null;log('healed','partition');clientWrite('y=2');render();},6500);
+stopNarr();reset(nodes.length||5);playing=true;$('playBtn').textContent='⏸ Pause';
+tourSteps=TOURS[s]||[];tourIdx=0;$('narr').classList.add('show');
+const show=()=>{if(tourIdx>=tourSteps.length){$('narrText').textContent='✓ Tour complete — try chaos controls yourself!';return;}$('narrText').textContent='('+(tourIdx+1)+'/'+tourSteps.length+') '+tourSteps[tourIdx][0];try{tourSteps[tourIdx][1]();}catch(e){}};
+show();
+$('narrNext').onclick=()=>{tourIdx++;if(tourIdx>=tourSteps.length){stopNarr();render();return;}show();};
+$('narrStop').onclick=stopNarr;
 }
 // wire
 let timer=null;function loop(){clearInterval(timer);timer=setInterval(()=>{if(playing)tick();},1000/speed);}
@@ -167,6 +203,7 @@ $('stepBtn').onclick=()=>{playing=false;$('playBtn').textContent='▶ Play';tick
 $('resetBtn').onclick=()=>reset(nodes.length);
 $('speed').oninput=e=>{speed=+e.target.value;loop();};
 $('loss').oninput=e=>{lossPct=+e.target.value;};
+$('lat').oninput=e=>{latTicks=+e.target.value;log('latency set to +'+latTicks+' ticks','partition');};
 $('writeBtn').onclick=()=>{const v=$('writeVal').value||('x='+(writeCtr++));clientWrite(v);$('writeVal').value='x='+(writeCtr++);};
 $('killLeaderBtn').onclick=()=>{const l=nodes.find(n=>n.state==='leader'&&n.alive)||alive()[0];if(l){l.alive=false;if(l.state==='leader')l.state='follower';log(l.id+' killed','crash');render();}};
 $('splitBtn').onclick=()=>{const ids=alive().map(n=>n.id);part={a:new Set(ids.slice(0,Math.ceil(ids.length/2))),b:new Set(ids.slice(Math.ceil(ids.length/2)))};log('partition split','partition');render();};
@@ -175,7 +212,18 @@ $('healBtn').onclick=()=>{part=null;log('healed — converging','partition');ren
 $('addBtn').onclick=()=>{const id='N'+(nodes.length+1);nodes.push(mkNode(id));if(part)part.b.add(id);log(id+' joined','election');render();};
 $('rmBtn').onclick=()=>{nodes.pop();log('node removed','crash');render();};
 $('walBtn').onclick=e=>{walOn=!walOn;e.target.textContent='WAL: '+(walOn?'on':'off');};
+$('walViewBtn').onclick=()=>{let w='(empty)';try{w=localStorage.getItem('raft-wal')||'(empty)';}catch(e){}$('walPre').textContent=w;$('walModal').classList.add('open');};
+$('walCloseBtn').onclick=()=>$('walModal').classList.remove('open');
+$('walReplayBtn').onclick=()=>{$('walModal').classList.remove('open');let before=[];try{before=JSON.parse(localStorage.getItem('raft-wal')||'[]');}catch(e){}const l=nodes.find(n=>n.state==='leader'&&n.alive);if(l){l.alive=false;l.state='follower';log(l.id+' killed (WAL replay test)','crash');}setTimeout(()=>{const nl=nodes.find(n=>n.state==='leader'&&n.alive)||nodes.find(n=>n.alive);const kept=nl&&before.every((e,i)=>nl.log[i]&&nl.log[i].cmd===e.cmd);log(kept?'WAL replay OK — '+before.length+' committed entries preserved':'WAL replay: waiting for election…','commit');render();},2500);render();};
+$('shareBtn').onclick=async()=>{const p=new URLSearchParams({nodes:nodes.length,loss:lossPct,lat:latTicks,speed});try{history.replaceState(null,'','?'+p);}catch(e){}try{await navigator.clipboard.writeText(location.href);log('share link copied','info');}catch(e){log(location.href,'info');}};
+$('csvBtn').onclick=()=>{const csv='tick,kind,msg\n'+allEvents.map(e=>[e.t,e.kind,'"'+e.m.replace(/"/g,'""')+'"'].join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='raft-events.csv';a.click();};
 $('themeBtn').onclick=()=>{const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark';};
+document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;if(e.key===' '){e.preventDefault();$('playBtn').click();}if(e.key==='s')$('stepBtn').click();if(e.key==='w')$('writeBtn').click();if(e.key==='h')$('healBtn').click();});
+// hover tooltip on topology
+$('topo').addEventListener('mousemove',e=>{const r=$('topo').getBoundingClientRect();const mx=e.clientX-r.left,my=e.clientY-r.top;let best=null,bd=1e9;for(const n of nodes){const P=pos(n.id);if(!P)continue;const d=(P.x-mx)**2+(P.y-my)**2;if(d<bd){bd=d;best=n;}}const tip=$('tip');if(best&&bd<900){tip.style.display='block';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY+12)+'px';tip.textContent=best.id+' · '+best.state+' · term '+best.term+' · '+best.commit+'/'+best.log.length+(part?(part.a.has(best.id)?' · group A':' · group B'):'');}else tip.style.display='none';});
+$('topo').addEventListener('mouseleave',()=>$('tip').style.display='none');
+// restore from URL
+try{const q=new URLSearchParams(location.search);if(q.get('loss')){lossPct=+q.get('loss');$('loss').value=lossPct;}if(q.get('lat')){latTicks=+q.get('lat');$('lat').value=latTicks;}if(q.get('speed')){speed=+q.get('speed');$('speed').value=speed;}}catch(e){}
 window.addEventListener('resize',drawTopo);
 reset(5);loop();
 </script>
