@@ -1,13 +1,15 @@
 # Raft Consensus Visual Lab
 
-> An interactive, single-file simulator for the Raft consensus algorithm — leader election, log replication, network partitions, and crash recovery, visualized in real time.
+> An interactive, single-file simulator for the Raft consensus algorithm — leader election, log replication, network partitions, and chaos engineering, visualized in real time.
 
 [![Live Demo](https://img.shields.io/badge/demo-live-success?style=flat-square)](https://flynntaggart26.github.io/raft-lab/)
 [![No dependencies](https://img.shields.io/badge/dependencies-none-blue?style=flat-square)](./index.html)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](./LICENSE)
-![HTML5](https://img.shields.io/badge/html5-single--file-orange?style=flat-square)
+![Single file](https://img.shields.io/badge/html5-single--file-orange?style=flat-square)
 
-**[▶ Live demo — https://flynntaggart26.github.io/raft-lab/](https://flynntaggart26.github.io/raft-lab/)** · [How to demo](#-2-minute-demo-script) · [How it works](#-how-it-works) · [Run locally](#-run-locally)
+**[▶ Live demo — https://flynntaggart26.github.io/raft-lab/](https://flynntaggart26.github.io/raft-lab/)** · [Demo script](#-2-minute-demo-script) · [Features](#-features-v2) · [How it works](#-how-it-works) · [Run locally](#-run-locally)
+
+![Raft Lab topology](https://img.shields.io/badge/UI-glass--dark-light--mode-blueviolet?style=flat-square)
 
 ---
 
@@ -15,58 +17,55 @@
 
 Distributed systems — from Google Spanner to bank ledgers — must agree on shared state even when servers crash or networks split. **Raft** (Ongaro & Ousterhout, 2014; taught in MIT 6.824 and Stanford CS244B) solves this with leader election + majority-committed log replication.
 
-This lab makes those abstract guarantees **visible and touchable**: kill a leader mid-term, split the network 3–2, heal it — and watch safety hold.
+This lab makes those guarantees **visible and touchable**: kill a leader mid-term, inject packet loss and latency, split the network 3–2, heal it — and watch safety hold, with live metrics to prove it.
 
-Built as a **single self-contained `index.html`** (~11 KB, zero dependencies, no backend) so it loads instantly on GitHub Pages and is fully auditable.
+Built as a **single self-contained `index.html`** (~26 KB, zero dependencies, no backend) so it loads instantly on GitHub Pages and is fully auditable.
 
-## ✨ Features
+## ✨ Features (v2)
 
-| Capability | What you can do |
-|------------|-----------------|
-| 🗳️ **Leader election** | Randomized election timeouts (150–300 ticks), terms, majority voting, split-vote retry |
-| 📝 **Log replication** | Send client writes to the leader; entries replicate via heartbeat and commit on majority ack (green) |
-| ✂️ **Network partitions** | `Split 3-2`, `Isolate leader`, `Heal all` — minority stalls, majority progresses, logs converge on heal |
-| 💥 **Crash recovery** | Kill/revive any node, add/remove nodes at runtime |
-| ⏯️ **Time control** | Play/pause, single-step, 1–20 ticks/sec speed slider |
-| 📜 **Event log** | Every election, commit, crash, and partition is timestamped by tick |
+| # | Feature | What improved |
+|---|---------|---------------|
+| 1 | 🌐 **Live topology map** | Ring layout with animated packets (green = replication, purple = heartbeat, yellow = votes, red ✕ = dropped), 👑 leader crown, pulse ring, shaded A/B partition zones, hover tooltip per node (state · term · commit) |
+| 2 | 📊 **Metrics dashboard** | Commits, elections, throughput with live **sparkline**, avg commit latency (ticks), majority availability %, tick counter |
+| 3 | 🎬 **Narrated scenarios** | One-click guided tours — Replicate / Kill leader / Split-brain / Full tour — with step-by-step narration banner, Next/Stop controls |
+| 4 | 🌩️ **Chaos tuning + WAL** | Packet-loss % slider, **latency slider** (delayed-delivery queue), drop counter, WAL persistence toggle, **View WAL modal** + one-click **replay test** proving no committed entry is lost |
+| 5 | 💎 **Glass UI + sharing** | Light/dark theme, term-colored commit timeline, filterable event log, **Copy share link** (encodes nodes/loss/latency), **Export event log CSV**, keyboard shortcuts (`space` play/pause, `s` step, `w` write, `h` heal) |
+
+Core Raft behavior: randomized election timeouts (150–300 ticks), 50-tick heartbeats, majority commit (`⌊n/2⌋+1`), split-vote retry, per-node kill/revive, add/remove nodes, 1–20 ticks/sec speed + single-step mode.
 
 ## 🎤 2-Minute Demo Script
 
-For university presentations and interviews:
+For university presentations and interviews — press **▶ Scenario: full tour** and narrate:
 
-1. **Replicate** — press `Send to leader` → entry fans out to followers and commits (turns green). *Point: "Commit required 3 of 5 acks."*
-2. **Kill the leader** — press `Kill leader` → timeouts fire, term increments, a new leader is elected in under a second with zero committed-data loss. *Point: "Safety under crash faults."*
-3. **Partition** — press `Split 3-2` → majority side keeps committing, minority stalls. Press `Heal all` → logs converge. *Point: "A minority can never fork history — the core Raft guarantee."*
+1. **Replicate** — client write fans out (green packets) and commits on 3/5 acks. *Point at sparkline + timeline.*
+2. **Kill the leader** — timeouts fire, yellow votes, new term, new leader, zero committed-data loss. *Point at WAL replay test.*
+3. **Split-brain 3–2** — majority side keeps committing, minority stalls (red dashed links). **Heal** → logs converge. *Closing line: "A minority can never fork history — the core Raft guarantee."*
 
 ## 🧠 How It Works
 
-Each tick of the simulation:
+Each simulation tick:
 
 - **Followers** count down a randomized election timeout. On expiry they become candidates, increment the term, vote for themselves, and request votes from all *reachable* nodes.
-- **Candidates** become leader on reaching a majority (`⌊n/2⌋+1`). Split votes fall back to follower with a fresh timeout.
-- **Leaders** send heartbeats every 50 ticks, piggybacking any missing log suffixes, and reset follower timeouts.
-- **Commit rule:** the leader advances `commitIndex` only when an entry is stored on a majority; followers learn the commit index on the next heartbeat.
-- **Failure model:** `reachable(a, b)` returns false if either node is dead or they sit in different partition groups — all RPCs (RequestVote, AppendEntries) are gated through it.
-
-This mirrors real Raft's safety argument in miniature: without a majority, nothing commits.
+- **Candidates** become leader on reaching a majority. Split votes fall back to follower with a fresh timeout.
+- **Leaders** send heartbeats every 50 ticks, piggybacking missing log suffixes (optionally delayed by the latency queue), resetting follower timeouts.
+- **Commit rule:** the leader advances `commitIndex` only when an entry is stored on a majority of the *same partition*; followers learn it on the next heartbeat.
+- **Failure model:** every message passes through `reachable()` + loss roll + partition check. Dropped packets render as red ✕; delayed ones sit in `delayQ`. This mirrors real Raft's safety argument: without a majority, nothing commits.
 
 ## 🛠️ Tech
 
-- **Vanilla HTML / CSS / JS** — no framework, no build step, no backend, no tracking
+- **Vanilla HTML / CSS / JS + Canvas** — no framework, no build step, no backend, no tracking
 - Deterministic tick loop (`setInterval` at `speed` Hz) with pause/step for classroom use
-- Colorblind-conscious state colors; responsive grid down to phones
+- `localStorage` WAL for the committed prefix; URL params for shareable configs
 
 ## 📁 Project Structure
 
 ```
 raft-lab/
-├── index.html   # entire app: UI + Raft state machine + renderer
+├── index.html   # entire app: UI + Raft state machine + Canvas renderer
 └── README.md    # this file
 ```
 
 ## 🚀 Run Locally
-
-No install needed — just open the file, or serve over HTTP for full fidelity:
 
 ```bash
 git clone https://github.com/Flynntaggart26/raft-lab.git
@@ -78,10 +77,12 @@ Or open `index.html` directly in any modern browser.
 
 ## 🗺️ Roadmap
 
-- [ ] Latency injection + message-drop slider (flaky network mode)
+- [x] Latency injection + packet-loss chaos
+- [x] Persistent WAL with replay test
+- [x] Narrated scenario tours + share links
 - [ ] Pre-vote phase to prevent disruptive servers
-- [ ] Persistent WAL via `localStorage` with crash-replay demo
 - [ ] Linearizable read (`ReadIndex`) visualization
+- [ ] Joint-consensus membership change animation
 
 ## 📚 References
 
